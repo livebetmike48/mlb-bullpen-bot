@@ -137,7 +137,7 @@ class BullpenBot(discord.Client):
             callback=self._lastapp_callback,
         )
         self.tree.add_command(lastapp_cmd)
-        self.tree.autocomplete(lastapp_cmd, "name")(self._name_autocomplete)
+        lastapp_cmd.autocomplete("name")(self._name_autocomplete)
 
         markreliever_cmd = app_commands.Command(
             name="markreliever",
@@ -145,7 +145,7 @@ class BullpenBot(discord.Client):
             callback=self._markreliever_callback,
         )
         self.tree.add_command(markreliever_cmd)
-        self.tree.autocomplete(markreliever_cmd, "name")(self._name_autocomplete)
+        markreliever_cmd.autocomplete("name")(self._name_autocomplete)
 
         unmarkreliever_cmd = app_commands.Command(
             name="unmarkreliever",
@@ -153,7 +153,7 @@ class BullpenBot(discord.Client):
             callback=self._unmarkreliever_callback,
         )
         self.tree.add_command(unmarkreliever_cmd)
-        self.tree.autocomplete(unmarkreliever_cmd, "name")(self._name_autocomplete)
+        unmarkreliever_cmd.autocomplete("name")(self._name_autocomplete)
 
         setchannel_cmd = app_commands.Command(
             name="setchannel",
