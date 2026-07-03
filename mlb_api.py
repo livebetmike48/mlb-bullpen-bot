@@ -114,20 +114,30 @@ def build_bullpen_history(team_id: int, report_date: str, lookback_days: int = 5
     Returns (appearances_by_pitcher, starter_ids) across the lookback window,
     where appearances_by_pitcher = {pitcher_id: [{"date":.., "pitches":..}, ...]}
     """
+    import logging
+    log = logging.getLogger("bullpen_bot")
     from collections import defaultdict
+
     start_date = (date.fromisoformat(report_date) - timedelta(days=lookback_days - 1)).isoformat()
     games = get_team_games(team_id, start_date, report_date)
+    final_games = [g for g in games if g["abstract_state"] == "Final"]
+    log.info(
+        "build_bullpen_history team=%s window=%s..%s: %d games found, %d Final",
+        team_id, start_date, report_date, len(games), len(final_games),
+    )
 
     appearances_by_pitcher = defaultdict(list)
     starter_ids = set()
 
-    for g in games:
-        if g["abstract_state"] != "Final":
-            continue
+    for g in final_games:
         try:
             appearances, starters = get_team_pitcher_appearances(team_id, g)
-        except Exception:
+        except Exception as e:
+            log.error("Failed to parse boxscore for game %s: %s", g["game_pk"], e)
             continue
+        log.info(
+            "  game %s (%s): %d pitcher appearances parsed", g["game_pk"], g["game_date"], len(appearances)
+        )
         for pid, pitches in appearances.items():
             appearances_by_pitcher[pid].append({"date": g["game_date"], "pitches": pitches})
         starter_ids |= starters
