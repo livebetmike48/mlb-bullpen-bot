@@ -190,16 +190,7 @@ class BullpenBot(discord.Client):
 
     def _register_team_command(self, team: dict):
         cmd_name = f"{team['abbreviation'].lower()}bullpen"
-
-        async def callback(interaction: discord.Interaction, _team=team):
-            await interaction.response.defer()
-            report_date = et_date_str(0)
-            try:
-                bp, notes = bullpen.build_team_bullpen(_team, report_date)
-            except Exception as e:
-                await interaction.followup.send(f"Couldn't build bullpen report right now: {e}")
-                return
-            await interaction.followup.send(embed=build_report_embed(_team, bp, notes, report_date))
+        callback = self._make_team_callback(team)
 
         command = app_commands.Command(
             name=cmd_name,
@@ -207,6 +198,18 @@ class BullpenBot(discord.Client):
             callback=callback,
         )
         self.tree.add_command(command)
+
+    def _make_team_callback(self, team: dict):
+        async def callback(interaction: discord.Interaction):
+            await interaction.response.defer()
+            report_date = et_date_str(0)
+            try:
+                bp, notes = bullpen.build_team_bullpen(team, report_date)
+            except Exception as e:
+                await interaction.followup.send(f"Couldn't build bullpen report right now: {e}")
+                return
+            await interaction.followup.send(embed=build_report_embed(team, bp, notes, report_date))
+        return callback
 
     async def _name_autocomplete(self, interaction: discord.Interaction, current: str):
         current_lower = current.lower()
