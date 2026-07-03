@@ -7,14 +7,24 @@ import storage
 STARTER_THRESHOLD = 3
 
 
-def build_team_bullpen(team: dict, report_date: str) -> tuple[list[dict], list[str]]:
+def build_team_bullpen(team: dict, history_date: str, check_date: str = None) -> tuple[list[dict], list[str]]:
     """
+    history_date: "today" -- anchors the lookback window that pulls recent
+                  game appearances. Also used for the bullpen-game heads-up
+                  note (flagging a short outing from today specifically).
+    check_date: the date we want availability status FOR. Defaults to
+                history_date itself (i.e. "is this pitcher available today,"
+                the natural framing for an on-demand check). Auto-generated
+                reports pass history_date's next day instead, since the
+                point of those is to prep for the upcoming game.
+
     Returns (bullpen_list, notes).
-    bullpen_list: [{"id":, "name":, "hand": "L"/"R"/"?", "status":, "reason":}]
-    notes: human-readable heads-up messages, e.g. a possible bullpen game.
     """
+    if check_date is None:
+        check_date = history_date
+
     roster = mlb_api.get_active_roster(team["id"])
-    appearances_by_pitcher, _ = mlb_api.build_bullpen_history(team["id"], report_date)
+    appearances_by_pitcher, _ = mlb_api.build_bullpen_history(team["id"], history_date)
 
     details = mlb_api.get_people_details([p["id"] for p in roster])
 
@@ -31,7 +41,7 @@ def build_team_bullpen(team: dict, report_date: str) -> tuple[list[dict], list[s
     bullpen = []
     for p in bullpen_roster:
         history = appearances_by_pitcher.get(p["id"], [])
-        status, reason = rules.compute_pitcher_status(history, report_date)
+        status, reason = rules.compute_pitcher_status(history, check_date)
         bullpen.append({
             "id": p["id"],
             "name": p["name"],
@@ -44,15 +54,15 @@ def build_team_bullpen(team: dict, report_date: str) -> tuple[list[dict], list[s
     bullpen.sort(key=lambda p: (order.get(p["status"], 3), p["name"]))
 
     # Possible-bullpen-game heads-up: a classified rotation starter threw
-    # unusually few pitches today. Can't know intent, so this is a flag,
-    # not an assumption -- use /markreliever if it should count for real.
+    # unusually few pitches today (history_date). Can't know intent, so
+    # this is a flag, not an assumption.
     notes = []
     for p in roster:
         pid = p["id"]
         if not is_rotation_starter(pid):
             continue
         today_appearances = appearances_by_pitcher.get(pid, [])
-        today_line = next((a for a in today_appearances if a["date"] == report_date), None)
+        today_line = next((a for a in today_appearances if a["date"] == history_date), None)
         if today_line and today_line["pitches"] < 30:
             notes.append(
                 f"⚠️ {p['name']} threw only {today_line['pitches']} pitches as starter — "
