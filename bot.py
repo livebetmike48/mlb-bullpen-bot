@@ -169,6 +169,13 @@ class BullpenBot(discord.Client):
         )
         self.tree.add_command(edge_cmd)
 
+        allbullpens_cmd = app_commands.Command(
+            name="allbullpens",
+            description="Post every team's bullpen report right now (useful for testing)",
+            callback=self._allbullpens_callback,
+        )
+        self.tree.add_command(allbullpens_cmd)
+
         try:
             synced = await self.tree.sync()
             log.info("Synced %d slash commands", len(synced))
@@ -282,6 +289,23 @@ class BullpenBot(discord.Client):
             edge_notes.extend(bullpen.find_edges(team["abbreviation"], bp))
 
         await interaction.followup.send(embed=build_edge_embed(edge_notes, report_date))
+
+    async def _allbullpens_callback(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        report_date = et_date_str(0)
+        await interaction.followup.send(f"Building all 30 bullpen reports for {report_date}, posting as they're ready...")
+
+        for team in self.teams:
+            try:
+                bp, notes = bullpen.build_team_bullpen(team, report_date)
+                _bullpen_cache.setdefault(report_date, {})[team["id"]] = bp
+            except Exception as e:
+                log.error("Failed to build bullpen for %s: %s", team["abbreviation"], e)
+                continue
+            try:
+                await interaction.channel.send(embed=build_report_embed(team, bp, notes, report_date))
+            except Exception as e:
+                log.error("Failed to send bullpen report for %s: %s", team["abbreviation"], e)
 
     async def on_ready(self):
         log.info("Logged in as %s", self.user)
