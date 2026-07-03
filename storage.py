@@ -41,6 +41,12 @@ def init_db():
                 pitcher_name TEXT
             )
         """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS team_coverage (
+                team_id INTEGER PRIMARY KEY,
+                last_check_date TEXT
+            )
+        """)
 
 
 def report_already_sent(team_id: int, report_date: str) -> bool:
@@ -105,3 +111,20 @@ def get_reliever_overrides() -> set[int]:
     with _conn() as c:
         rows = c.execute("SELECT pitcher_id FROM reliever_overrides").fetchall()
         return {r["pitcher_id"] for r in rows}
+
+
+def get_last_check_date(team_id: int):
+    with _conn() as c:
+        row = c.execute(
+            "SELECT last_check_date FROM team_coverage WHERE team_id = ?", (team_id,)
+        ).fetchone()
+        return row["last_check_date"] if row else None
+
+
+def set_last_check_date(team_id: int, check_date: str):
+    with _conn() as c:
+        c.execute(
+            "INSERT INTO team_coverage (team_id, last_check_date) VALUES (?, ?) "
+            "ON CONFLICT(team_id) DO UPDATE SET last_check_date = excluded.last_check_date",
+            (team_id, check_date),
+        )
