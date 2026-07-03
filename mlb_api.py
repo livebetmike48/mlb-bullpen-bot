@@ -37,18 +37,43 @@ def get_active_roster(team_id: int) -> list[dict]:
     return pitchers
 
 
-def get_people_handedness(person_ids: list[int]) -> dict[int, str]:
-    """Batch-fetch pitch-hand ('L'/'R') for a list of player IDs."""
+def get_people_details(person_ids: list[int], season: int = 2026) -> dict[int, dict]:
+    """
+    Batch-fetch, for each player: pitch hand and season games-started/played.
+    Used to reliably classify rotation starters vs relievers -- a short
+    box-score lookback window can miss a starter whose last turn fell just
+    outside it (e.g. after an off day), so season totals are the sturdier
+    signal for "is this person a starter."
+    """
     if not person_ids:
         return {}
     ids_str = ",".join(str(i) for i in person_ids)
-    resp = requests.get(f"{BASE}/people", params={"personIds": ids_str}, timeout=15)
+    resp = requests.get(
+        f"{BASE}/people",
+        params={
+            "personIds": ids_str,
+            "hydrate": f"stats(group=[pitching],type=[season],season={season})",
+        },
+        timeout=15,
+    )
     resp.raise_for_status()
     data = resp.json()
+
     result = {}
     for p in data.get("people", []):
         hand = (p.get("pitchHand") or {}).get("code", "?")
-        result[p["id"]] = hand
+        games_started = 0
+        games_played = 0
+        for stat_block in p.get("stats", []):
+            for split in stat_block.get("splits", []):
+                stat = split.get("stat", {}) or {}
+                games_started = stat.get("gamesStarted", games_started)
+                games_played = stat.get("gamesPlayed", games_played)
+        result[p["id"]] = {
+            "hand": hand,
+            "games_started": games_started,
+            "games_played": games_played,
+        }
     return result
 
 
