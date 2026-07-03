@@ -295,7 +295,7 @@ class BullpenBot(discord.Client):
         report_date = et_date_str(0)
         await interaction.followup.send(f"Building all 30 bullpen reports for {report_date}, posting as they're ready...")
 
-        for team in self.teams:
+        for team in sorted(self.teams, key=lambda t: t["name"]):
             try:
                 bp, notes = bullpen.build_team_bullpen(team, report_date)
                 _bullpen_cache.setdefault(report_date, {})[team["id"]] = bp
