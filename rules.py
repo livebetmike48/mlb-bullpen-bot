@@ -31,31 +31,29 @@ def _pitch_based_days(pitches: int) -> int:
     return 0
 
 
-def compute_pitcher_status(appearances: list[dict], report_date: str) -> tuple[str, str]:
+def compute_pitcher_status(appearances: list[dict], check_date: str) -> tuple[str, str]:
     """
     appearances: list of {"date": "YYYY-MM-DD", "pitches": int}, any order.
-    report_date: the date whose game(s) just concluded -- this report is
-                 generated to prep for the game AFTER this date.
+    check_date: the date we want to know availability FOR (e.g. "today" for
+                an on-demand check, or "tomorrow" when generating a report
+                right after today's game just ended).
+
+    Only appearances strictly BEFORE check_date are considered -- this
+    function always answers "is this pitcher available on check_date,
+    given everything that happened before it."
 
     Returns (status, reason) where status is "red" / "yellow" / "green".
-
-    Anchors on the pitcher's actual most recent appearance (not on whether
-    report_date itself is a game day), then projects availability forward
-    to the NEXT day. A pitcher who threw back-to-back Wed/Thu is unavailable
-    Friday -- this holds even if Thursday's specific report run is what
-    surfaces it, and even through an off day.
     """
     if not appearances:
         return "green", "Rested"
 
-    rd = date.fromisoformat(report_date)
-    next_date = rd + timedelta(days=1)  # the day this report is actually forecasting
+    cd = date.fromisoformat(check_date)
 
     by_date: dict[str, int] = {}
     for a in appearances:
         by_date[a["date"]] = max(by_date.get(a["date"], 0), a["pitches"])
 
-    relevant_dates = sorted(d for d in by_date if date.fromisoformat(d) <= rd)
+    relevant_dates = sorted(d for d in by_date if date.fromisoformat(d) < cd)
     if not relevant_dates:
         return "green", "Rested"
 
@@ -97,11 +95,11 @@ def compute_pitcher_status(appearances: list[dict], report_date: str) -> tuple[s
             unavailable_until = until
             reason = f"Pitched {count_in_window}x in last 4 days"
 
-    if unavailable_until and next_date <= unavailable_until:
+    if unavailable_until and cd <= unavailable_until:
         return "red", reason
 
-    # --- Questionable: 25-29 pitches on the outing this report is based on ---
-    if 25 <= most_recent_pitches < 30 and most_recent_date == rd:
+    # --- Questionable: 25-29 pitches the day immediately before check_date ---
+    if 25 <= most_recent_pitches < 30 and most_recent_date == cd - timedelta(days=1):
         return "yellow", f"{most_recent_pitches} pitches on {most_recent_str} — TBD"
 
     return "green", "Available"
