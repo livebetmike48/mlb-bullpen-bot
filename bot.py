@@ -295,7 +295,7 @@ class BullpenBot(discord.Client):
         report_date = et_date_str(0)
         await interaction.followup.send(f"Building all 30 bullpen reports for {report_date}, posting as they're ready...")
 
-        for team in sorted(self.teams, key=lambda t: t["name"]):
+        for team in self.teams:
             try:
                 bp, notes = bullpen.build_team_bullpen(team, report_date)
                 _bullpen_cache.setdefault(report_date, {})[team["id"]] = bp
@@ -354,8 +354,7 @@ async def poll_bullpens(bot: BullpenBot):
             if not team:
                 continue
             try:
-                next_date = (datetime.strptime(report_date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
-                bp, notes = bullpen.build_team_bullpen(team, report_date, check_date=next_date)
+                bp, notes = bullpen.build_team_bullpen(team, report_date)
             except Exception as e:
                 log.error("Failed to build bullpen for team %s: %s", team_id, e)
                 continue
@@ -363,14 +362,13 @@ async def poll_bullpens(bot: BullpenBot):
             _bullpen_cache[report_date][team_id] = bp
             storage.mark_report_sent(team_id, report_date)
             try:
-                await channel.send(embed=build_report_embed(team, bp, notes, next_date))
+                await channel.send(embed=build_report_embed(team, bp, notes, report_date))
                 log.info("Posted bullpen report for %s", team["abbreviation"])
             except Exception as e:
                 log.error("Failed to send bullpen report for team %s: %s", team_id, e)
 
     all_final = all(g["abstract_state"] == "Final" for g in games)
     if all_final and not storage.edge_alert_already_sent(report_date):
-        next_date = (datetime.strptime(report_date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
         edge_notes = []
         for team_id in teams_played_today:
             team = bot.teams_by_id.get(team_id)
@@ -379,7 +377,7 @@ async def poll_bullpens(bot: BullpenBot):
             bp = _bullpen_cache.get(report_date, {}).get(team_id)
             if bp is None:
                 try:
-                    bp, _ = bullpen.build_team_bullpen(team, report_date, check_date=next_date)
+                    bp, _ = bullpen.build_team_bullpen(team, report_date)
                 except Exception as e:
                     log.error("Failed to build bullpen for edge alert, team %s: %s", team_id, e)
                     continue
@@ -388,7 +386,7 @@ async def poll_bullpens(bot: BullpenBot):
         storage.mark_edge_alert_sent(report_date)
         if edge_notes:
             try:
-                await channel.send(embed=build_edge_embed(edge_notes, next_date))
+                await channel.send(embed=build_edge_embed(edge_notes, report_date))
                 log.info("Posted edge alert with %d notes", len(edge_notes))
             except Exception as e:
                 log.error("Failed to send edge alert: %s", e)
