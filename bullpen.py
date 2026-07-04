@@ -53,23 +53,7 @@ def build_team_bullpen(team: dict, history_date: str, check_date: str = None) ->
     order = {"red": 0, "yellow": 1, "green": 2}
     bullpen.sort(key=lambda p: (order.get(p["status"], 3), p["name"]))
 
-    # Possible-bullpen-game heads-up: a classified rotation starter threw
-    # unusually few pitches today (history_date). Can't know intent, so
-    # this is a flag, not an assumption.
-    notes = []
-    for p in roster:
-        pid = p["id"]
-        if not is_rotation_starter(pid):
-            continue
-        today_appearances = appearances_by_pitcher.get(pid, [])
-        today_line = next((a for a in today_appearances if a["date"] == history_date), None)
-        if today_line and today_line["pitches"] < 30:
-            notes.append(
-                f"⚠️ {p['name']} threw only {today_line['pitches']} pitches as starter — "
-                f"possible bullpen game. Use /markreliever if they should count as a reliever."
-            )
-
-    return bullpen, notes
+    return bullpen, []
 
 
 def find_edges(team_abbr: str, bullpen: list[dict]) -> list[str]:
