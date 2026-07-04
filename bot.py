@@ -1,5 +1,6 @@
 import os
 import logging
+import asyncio
 from datetime import datetime, timedelta, timezone
 
 import discord
@@ -186,7 +187,7 @@ class BullpenBot(discord.Client):
         directory = []
         for team in self.teams:
             try:
-                pitchers = mlb_api.get_active_roster(team["id"])
+                pitchers = await asyncio.to_thread(mlb_api.get_active_roster, team["id"])
             except Exception as e:
                 log.error("Failed to fetch roster for team %s: %s", team["id"], e)
                 continue
@@ -212,7 +213,7 @@ class BullpenBot(discord.Client):
             report_date = et_date_str(0)
             next_date = (datetime.strptime(report_date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
             try:
-                bp, notes = bullpen.build_team_bullpen(team, report_date, check_date=next_date)
+                bp, notes = await asyncio.to_thread(bullpen.build_team_bullpen, team, report_date, check_date=next_date)
             except Exception as e:
                 await interaction.followup.send(f"Couldn't build bullpen report right now: {e}")
                 return
@@ -283,7 +284,7 @@ class BullpenBot(discord.Client):
             bp = cached.get(team["id"])
             if bp is None:
                 try:
-                    bp, _ = bullpen.build_team_bullpen(team, report_date, check_date=next_date)
+                    bp, _ = await asyncio.to_thread(bullpen.build_team_bullpen, team, report_date, check_date=next_date)
                     _bullpen_cache.setdefault(report_date, {})[team["id"]] = bp
                 except Exception as e:
                     log.error("Edge check failed for team %s: %s", team["id"], e)
@@ -300,7 +301,7 @@ class BullpenBot(discord.Client):
 
         for team in sorted(self.teams, key=lambda t: t["name"]):
             try:
-                bp, notes = bullpen.build_team_bullpen(team, report_date, check_date=next_date)
+                bp, notes = await asyncio.to_thread(bullpen.build_team_bullpen, team, report_date, check_date=next_date)
                 _bullpen_cache.setdefault(report_date, {})[team["id"]] = bp
             except Exception as e:
                 log.error("Failed to build bullpen for %s: %s", team["abbreviation"], e)
@@ -360,13 +361,14 @@ async def poll_bullpens(bot: BullpenBot):
         if not team:
             continue
         try:
-            bp, notes = bullpen.build_team_bullpen(team, today_str)  # check_date defaults to today_str
+            bp, notes = await asyncio.to_thread(bullpen.build_team_bullpen, team, today_str)  # check_date defaults to today_str
             if last_covered:  # None means "never posted for this team before" -- not an off-day gap
                 notes = ["⏸️ Team had an off day, refreshing availability for today."] + notes
         except Exception as e:
             log.error("Gap-fill failed for team %s: %s", team_id, e)
             continue
         storage.set_last_check_date(team_id, today_str)
+        storage.mark_report_sent(team_id, today_str)
         try:
             await channel.send(embed=build_report_embed(team, bp, notes, today_str))
             log.info("Posted gap-fill bullpen report for %s", team["abbreviation"])
@@ -384,7 +386,7 @@ async def poll_bullpens(bot: BullpenBot):
                 continue
             try:
                 next_date = (datetime.strptime(report_date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
-                bp, notes = bullpen.build_team_bullpen(team, report_date, check_date=next_date)
+                bp, notes = await asyncio.to_thread(bullpen.build_team_bullpen, team, report_date, check_date=next_date)
             except Exception as e:
                 log.error("Failed to build bullpen for team %s: %s", team_id, e)
                 continue
@@ -409,7 +411,7 @@ async def poll_bullpens(bot: BullpenBot):
             bp = _bullpen_cache.get(report_date, {}).get(team_id)
             if bp is None:
                 try:
-                    bp, _ = bullpen.build_team_bullpen(team, report_date, check_date=next_date)
+                    bp, _ = await asyncio.to_thread(bullpen.build_team_bullpen, team, report_date, check_date=next_date)
                 except Exception as e:
                     log.error("Failed to build bullpen for edge alert, team %s: %s", team_id, e)
                     continue
