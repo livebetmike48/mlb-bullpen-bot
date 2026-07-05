@@ -330,7 +330,7 @@ async def poll_bullpens(bot: BullpenBot):
 
     report_date = et_date_str(0)
     try:
-        games = get_today_schedule(report_date)
+        games = await asyncio.to_thread(get_today_schedule, report_date)
     except Exception as e:
         log.error("Failed to fetch today's schedule: %s", e)
         return
