@@ -355,8 +355,8 @@ async def poll_bullpens(bot: BullpenBot):
     today_str = et_date_str(0)
     for team_id in teams_played_today:
         last_covered = storage.get_last_check_date(team_id)
-        if last_covered == today_str:
-            continue  # already covered today as of the start of this cycle
+        if last_covered and last_covered >= today_str:
+            continue  # already covered today (or even further ahead) -- not stale
         team = bot.teams_by_id.get(team_id)
         if not team:
             continue
