@@ -178,8 +178,15 @@ class BullpenBot(discord.Client):
         self.tree.add_command(allbullpens_cmd)
 
         try:
-            synced = await self.tree.sync()
-            log.info("Synced %d slash commands", len(synced))
+            guild_id = os.getenv("GUILD_ID")
+            if guild_id:
+                guild = discord.Object(id=int(guild_id))
+                self.tree.copy_global_to(guild=guild)
+                synced = await self.tree.sync(guild=guild)
+                log.info("Synced %d slash commands to guild %s (fast, avoids global rate limits)", len(synced), guild_id)
+            else:
+                synced = await self.tree.sync()
+                log.info("Synced %d slash commands globally (set GUILD_ID env var for faster, safer syncing)", len(synced))
         except Exception as e:
             log.error("Slash command sync failed: %s", e)
 
@@ -314,6 +321,8 @@ class BullpenBot(discord.Client):
             poll_bullpens.start(self)
         if not refresh_directory_loop.is_running():
             refresh_directory_loop.start(self)
+        if not watchdog.is_running():
+            watchdog.start()
 
 
 client = BullpenBot()
@@ -321,6 +330,17 @@ client = BullpenBot()
 
 @tasks.loop(minutes=POLL_MINUTES)
 async def poll_bullpens(bot: BullpenBot):
+    try:
+        await _poll_bullpens_body(bot)
+    except Exception as e:
+        # Top-level safety net: discord.py's task loop permanently stops on
+        # any unhandled exception with no automatic restart. This guarantees
+        # that can never happen here -- worst case, this one cycle is
+        # skipped and logged, but the loop itself keeps running forever.
+        log.error("poll_bullpens cycle failed unexpectedly, will retry next cycle: %s", e)
+
+
+async def _poll_bullpens_body(bot: BullpenBot):
     channel_id = storage.get_config("announce_channel_id")
     if not channel_id:
         return
@@ -428,11 +448,35 @@ async def before_poll():
 
 @tasks.loop(hours=ROSTER_REFRESH_HOURS)
 async def refresh_directory_loop(bot: BullpenBot):
-    await bot.refresh_player_directory()
+    try:
+        await bot.refresh_player_directory()
+    except Exception as e:
+        log.error("refresh_directory_loop cycle failed unexpectedly, will retry next cycle: %s", e)
 
 
 @refresh_directory_loop.before_loop
 async def before_refresh():
+    await client.wait_until_ready()
+
+
+@tasks.loop(minutes=2)
+async def watchdog():
+    """
+    Belt-and-suspenders: if either background loop somehow stops for any
+    reason not already caught above, this notices within 2 minutes and
+    restarts it -- rather than the bot going silently dark with no
+    automatic recovery.
+    """
+    if not poll_bullpens.is_running():
+        log.error("poll_bullpens was found stopped -- restarting it now")
+        poll_bullpens.start(client)
+    if not refresh_directory_loop.is_running():
+        log.error("refresh_directory_loop was found stopped -- restarting it now")
+        refresh_directory_loop.start(client)
+
+
+@watchdog.before_loop
+async def before_watchdog():
     await client.wait_until_ready()
 
 
