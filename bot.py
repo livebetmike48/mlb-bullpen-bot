@@ -184,6 +184,15 @@ class BullpenBot(discord.Client):
                 self.tree.copy_global_to(guild=guild)
                 synced = await self.tree.sync(guild=guild)
                 log.info("Synced %d slash commands to guild %s (fast, avoids global rate limits)", len(synced), guild_id)
+
+                # One-time cleanup: earlier deploys registered these commands
+                # GLOBALLY. Switching to guild-sync doesn't remove those old
+                # global copies on Discord's side, so both were showing up
+                # side by side -- explicitly wiping the global registration
+                # here fixes the duplicate-response symptom for good.
+                self.tree.clear_commands(guild=None)
+                await self.tree.sync()
+                log.info("Cleared stale global command registration (one-time cleanup)")
             else:
                 synced = await self.tree.sync()
                 log.info("Synced %d slash commands globally (set GUILD_ID env var for faster, safer syncing)", len(synced))
