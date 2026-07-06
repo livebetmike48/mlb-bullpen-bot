@@ -33,6 +33,28 @@ def et_date_str(offset_days: int = 0) -> str:
     return et.strftime("%Y-%m-%d")
 
 
+def get_effective_check_date(team_id: int, today_str: str) -> str:
+    """
+    The bullpen report should always be prepping for the NEXT game, not
+    whichever game already happened. If this team's game today is already
+    Final, the next game is tomorrow. If today's game hasn't happened yet
+    (or there's no game today), today itself is still the next game.
+    """
+    try:
+        games = get_today_schedule(today_str)
+    except Exception as e:
+        log.error("Couldn't fetch today's schedule for effective check_date, defaulting to today: %s", e)
+        return today_str
+
+    for g in games:
+        if team_id in (g["home_team_id"], g["away_team_id"]):
+            if g["abstract_state"] == "Final":
+                return (datetime.strptime(today_str, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+            return today_str  # game exists today but hasn't concluded yet
+
+    return today_str  # no game today at all -- today is still the relevant date to check
+
+
 def get_today_schedule(date_str: str) -> list[dict]:
     import requests
     resp = requests.get(
@@ -228,11 +250,12 @@ class BullpenBot(discord.Client):
             await interaction.response.defer()
             report_date = et_date_str(0)
             try:
-                bp, notes = await asyncio.to_thread(bullpen.build_team_bullpen, team, report_date)
+                check_date = await asyncio.to_thread(get_effective_check_date, team["id"], report_date)
+                bp, notes = await asyncio.to_thread(bullpen.build_team_bullpen, team, report_date, check_date)
             except Exception as e:
                 await interaction.followup.send(f"Couldn't build bullpen report right now: {e}")
                 return
-            await interaction.followup.send(embed=build_report_embed(team, bp, notes, report_date))
+            await interaction.followup.send(embed=build_report_embed(team, bp, notes, check_date))
         return callback
 
     async def _name_autocomplete(self, interaction: discord.Interaction, current: str):
@@ -298,7 +321,8 @@ class BullpenBot(discord.Client):
             bp = cached.get(team["id"])
             if bp is None:
                 try:
-                    bp, _ = await asyncio.to_thread(bullpen.build_team_bullpen, team, report_date)
+                    check_date = await asyncio.to_thread(get_effective_check_date, team["id"], report_date)
+                    bp, _ = await asyncio.to_thread(bullpen.build_team_bullpen, team, report_date, check_date)
                     _bullpen_cache.setdefault(report_date, {})[team["id"]] = bp
                 except Exception as e:
                     log.error("Edge check failed for team %s: %s", team["id"], e)
@@ -314,7 +338,8 @@ class BullpenBot(discord.Client):
 
         for team in sorted(self.teams, key=lambda t: t["name"]):
             try:
-                bp, notes = await asyncio.to_thread(bullpen.build_team_bullpen, team, report_date)
+                check_date = await asyncio.to_thread(get_effective_check_date, team["id"], report_date)
+                bp, notes = await asyncio.to_thread(bullpen.build_team_bullpen, team, report_date, check_date)
                 _bullpen_cache.setdefault(report_date, {})[team["id"]] = bp
             except Exception as e:
                 log.error("Failed to build bullpen for %s: %s", team["abbreviation"], e)
@@ -387,16 +412,17 @@ async def _poll_bullpens_body(bot: BullpenBot):
         if not team:
             continue
         try:
-            bp, notes = await asyncio.to_thread(bullpen.build_team_bullpen, team, today_str)  # check_date defaults to today_str
+            check_date = await asyncio.to_thread(get_effective_check_date, team_id, today_str)
+            bp, notes = await asyncio.to_thread(bullpen.build_team_bullpen, team, today_str, check_date)
             if last_covered:  # None means "never posted for this team before" -- not an off-day gap
                 notes = ["⏸️ Team had an off day, refreshing availability for today."] + notes
         except Exception as e:
             log.error("Gap-fill failed for team %s: %s", team_id, e)
             continue
-        storage.set_last_check_date(team_id, today_str)
+        storage.set_last_check_date(team_id, check_date)
         storage.mark_report_sent(team_id, today_str)
         try:
-            await channel.send(embed=build_report_embed(team, bp, notes, today_str))
+            await channel.send(embed=build_report_embed(team, bp, notes, check_date))
             log.info("Posted gap-fill bullpen report for %s", team["abbreviation"])
         except Exception as e:
             log.error("Failed to send gap-fill report for team %s: %s", team_id, e)
@@ -410,23 +436,25 @@ async def _poll_bullpens_body(bot: BullpenBot):
             team = bot.teams_by_id.get(team_id)
             if not team:
                 continue
+            next_date = (datetime.strptime(report_date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
             try:
-                bp, notes = await asyncio.to_thread(bullpen.build_team_bullpen, team, report_date)
+                bp, notes = await asyncio.to_thread(bullpen.build_team_bullpen, team, report_date, next_date)
             except Exception as e:
                 log.error("Failed to build bullpen for team %s: %s", team_id, e)
                 continue
 
             _bullpen_cache[report_date][team_id] = bp
             storage.mark_report_sent(team_id, report_date)
-            storage.set_last_check_date(team_id, report_date)
+            storage.set_last_check_date(team_id, next_date)
             try:
-                await channel.send(embed=build_report_embed(team, bp, notes, report_date))
+                await channel.send(embed=build_report_embed(team, bp, notes, next_date))
                 log.info("Posted bullpen report for %s", team["abbreviation"])
             except Exception as e:
                 log.error("Failed to send bullpen report for team %s: %s", team_id, e)
 
     all_final = all(g["abstract_state"] == "Final" for g in games)
     if all_final and not storage.edge_alert_already_sent(report_date):
+        next_date = (datetime.strptime(report_date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
         edge_notes = []
         for team_id in teams_played_today:
             team = bot.teams_by_id.get(team_id)
@@ -435,7 +463,7 @@ async def _poll_bullpens_body(bot: BullpenBot):
             bp = _bullpen_cache.get(report_date, {}).get(team_id)
             if bp is None:
                 try:
-                    bp, _ = await asyncio.to_thread(bullpen.build_team_bullpen, team, report_date)
+                    bp, _ = await asyncio.to_thread(bullpen.build_team_bullpen, team, report_date, next_date)
                 except Exception as e:
                     log.error("Failed to build bullpen for edge alert, team %s: %s", team_id, e)
                     continue
@@ -444,7 +472,7 @@ async def _poll_bullpens_body(bot: BullpenBot):
         storage.mark_edge_alert_sent(report_date)
         if edge_notes:
             try:
-                await channel.send(embed=build_edge_embed(edge_notes, report_date))
+                await channel.send(embed=build_edge_embed(edge_notes, next_date))
                 log.info("Posted edge alert with %d notes", len(edge_notes))
             except Exception as e:
                 log.error("Failed to send edge alert: %s", e)
