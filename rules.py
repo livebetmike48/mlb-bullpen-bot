@@ -53,7 +53,7 @@ def compute_pitcher_status(appearances: list[dict], check_date: str) -> tuple[st
     for a in appearances:
         by_date[a["date"]] = max(by_date.get(a["date"], 0), a["pitches"])
 
-    relevant_dates = sorted(d for d in by_date if date.fromisoformat(d) < cd)
+    relevant_dates = sorted(d for d in by_date if date.fromisoformat(d) <= cd)
     if not relevant_dates:
         return "green", "Rested"
 
