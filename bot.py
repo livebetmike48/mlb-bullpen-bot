@@ -453,39 +453,23 @@ async def _poll_bullpens_body(bot: BullpenBot):
                 log.error("Failed to send bullpen report for team %s: %s", team_id, e)
 
     all_final = all(g["abstract_state"] == "Final" for g in games)
-    if all_final and not storage.final_batch_already_sent(report_date):
+    if all_final and not storage.edge_alert_already_sent(report_date):
         next_date = (datetime.strptime(report_date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
         edge_notes = []
-        final_batch_teams = []
         for team_id in teams_played_today:
             team = bot.teams_by_id.get(team_id)
             if not team:
                 continue
             bp = _bullpen_cache.get(report_date, {}).get(team_id)
-            notes = []
             if bp is None:
                 try:
-                    bp, notes = await asyncio.to_thread(bullpen.build_team_bullpen, team, report_date, next_date)
-                    _bullpen_cache.setdefault(report_date, {})[team_id] = bp
+                    bp, _ = await asyncio.to_thread(bullpen.build_team_bullpen, team, report_date, next_date)
                 except Exception as e:
                     log.error("Failed to build bullpen for edge alert, team %s: %s", team_id, e)
                     continue
             edge_notes.extend(bullpen.find_edges(team["abbreviation"], bp))
-            final_batch_teams.append((team, bp, notes))
 
         storage.mark_edge_alert_sent(report_date)
-        storage.mark_final_batch_sent(report_date)
-
-        # Final consolidated batch: every team that played today, alphabetical,
-        # sent once the whole night's slate is done -- separate from (and in
-        # addition to) each team's own individual post right after its game.
-        for team, bp, notes in sorted(final_batch_teams, key=lambda x: x[0]["name"]):
-            try:
-                await channel.send(embed=build_report_embed(team, bp, notes, next_date))
-            except Exception as e:
-                log.error("Failed to send final-batch report for %s: %s", team["abbreviation"], e)
-        log.info("Posted final consolidated batch for %d teams", len(final_batch_teams))
-
         if edge_notes:
             try:
                 await channel.send(embed=build_edge_embed(edge_notes, next_date))
