@@ -31,6 +31,11 @@ def init_db():
             )
         """)
         c.execute("""
+            CREATE TABLE IF NOT EXISTS sent_final_batches (
+                report_date TEXT PRIMARY KEY
+            )
+        """)
+        c.execute("""
             CREATE TABLE IF NOT EXISTS config (
                 key TEXT PRIMARY KEY,
                 value TEXT
@@ -78,6 +83,19 @@ def edge_alert_already_sent(report_date: str) -> bool:
 def mark_edge_alert_sent(report_date: str):
     with _conn() as c:
         c.execute("INSERT OR IGNORE INTO sent_edge_alerts (report_date) VALUES (?)", (report_date,))
+
+
+def final_batch_already_sent(report_date: str) -> bool:
+    with _conn() as c:
+        row = c.execute(
+            "SELECT 1 FROM sent_final_batches WHERE report_date = ?", (report_date,)
+        ).fetchone()
+        return row is not None
+
+
+def mark_final_batch_sent(report_date: str):
+    with _conn() as c:
+        c.execute("INSERT OR IGNORE INTO sent_final_batches (report_date) VALUES (?)", (report_date,))
 
 
 def set_config(key: str, value: str):
