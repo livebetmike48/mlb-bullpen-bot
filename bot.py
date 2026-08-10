@@ -476,15 +476,14 @@ async def _poll_bullpens_body(bot: BullpenBot):
         storage.mark_edge_alert_sent(report_date)
         storage.mark_final_batch_sent(report_date)
 
-        # Final consolidated batch: every team that played today, alphabetical,
-        # sent once the whole night's slate is done -- separate from (and in
-        # addition to) each team's own individual post right after its game.
-        for team, bp, notes in sorted(final_batch_teams, key=lambda x: x[0]["name"]):
-            try:
-                await channel.send(embed=build_report_embed(team, bp, notes, next_date))
-            except Exception as e:
-                log.error("Failed to send final-batch report for %s: %s", team["abbreviation"], e)
-        log.info("Posted final consolidated batch for %d teams", len(final_batch_teams))
+        # The midnight consolidated re-send of every team's report was
+        # RETIRED Aug 2026 -- it duplicated the after-game posts, and the
+        # 11 PM threads-bot draft now owns the nightly all-teams view.
+        # Each team's report still posts right after its game ends, and
+        # the cross-team edge alert below still fires once the slate is
+        # done (that one is unique information, not a re-send).
+        log.info("Slate final: skipping retired consolidated batch (%d teams), "
+                 "edge alert only", len(final_batch_teams))
 
         if edge_notes:
             try:
