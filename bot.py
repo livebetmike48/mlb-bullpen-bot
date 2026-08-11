@@ -1,7 +1,7 @@
 import os
 import logging
 import asyncio
-from datetime import datetime, timedelta, timezone, time as dtime
+from datetime import datetime, timedelta, timezone
 
 import discord
 from discord import app_commands
@@ -15,16 +15,6 @@ import storage
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 POLL_MINUTES = float(os.getenv("POLL_MINUTES", "3"))
-# Daily edge alert: fixed clock time, DAY-OF at 11:45 AM ET (15:45 UTC) --
-# by then every pen's overnight usage is complete, so the edges for
-# today's games are built from finished data, never partial.
-EDGE_ALERT_TIME_UTC = os.getenv("EDGE_ALERT_TIME_UTC", "15:45")
-try:
-    _eh, _em = (int(x) for x in EDGE_ALERT_TIME_UTC.split(":"))
-except ValueError:
-    _eh, _em = 15, 45
-EDGE_ALERT_TIME = dtime(hour=_eh, minute=_em)
-
 ROSTER_REFRESH_HOURS = float(os.getenv("ROSTER_REFRESH_HOURS", "6"))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -363,7 +353,6 @@ class BullpenBot(discord.Client):
         log.info("Logged in as %s", self.user)
         if not poll_bullpens.is_running():
             poll_bullpens.start(self)
-            edge_alert_post.start(self)
         if not refresh_directory_loop.is_running():
             refresh_directory_loop.start(self)
         if not watchdog.is_running():
@@ -463,77 +452,50 @@ async def _poll_bullpens_body(bot: BullpenBot):
             except Exception as e:
                 log.error("Failed to send bullpen report for team %s: %s", team_id, e)
 
-    # (The slate-final consolidated batch AND the slate-final edge alert
-    # are both retired from this loop -- the edge alert now posts on its
-    # own fixed schedule below, 11:45 PM ET nightly.)
-
-@poll_bullpens.before_loop
-async def before_poll():
-    await client.wait_until_ready()
-
-
-@tasks.loop(time=EDGE_ALERT_TIME)
-async def edge_alert_post(bot: BullpenBot):
-    try:
-        channel_id = storage.get_config("announce_channel_id")
-        if not channel_id:
-            return
-        channel = bot.get_channel(int(channel_id))
-        if channel is None:
-            return
-        # Day-of semantics: the edges are for TODAY's games, built from
-        # usage through YESTERDAY's completed slate -- same math the old
-        # slate-final alert did at ~midnight, just run the morning after.
-        report_date = et_date_str(-1)
-        if storage.edge_alert_already_sent(report_date):
-            return
-        try:
-            games = await asyncio.to_thread(get_today_schedule, report_date)
-        except Exception as e:
-            log.error("Edge alert: schedule fetch failed: %s", e)
-            return
-        if not games:
-            return
-        teams_played_today = set()
-        for g in games:
-            teams_played_today.add(g["home_team_id"])
-            teams_played_today.add(g["away_team_id"])
-        next_date = (datetime.strptime(report_date, "%Y-%m-%d")
-                     + timedelta(days=1)).strftime("%Y-%m-%d")
+    all_final = all(g["abstract_state"] == "Final" for g in games)
+    if all_final and not storage.final_batch_already_sent(report_date):
+        next_date = (datetime.strptime(report_date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
         edge_notes = []
+        final_batch_teams = []
         for team_id in teams_played_today:
             team = bot.teams_by_id.get(team_id)
             if not team:
                 continue
             bp = _bullpen_cache.get(report_date, {}).get(team_id)
+            notes = []
             if bp is None:
                 try:
-                    bp, _n = await asyncio.to_thread(
-                        bullpen.build_team_bullpen, team, report_date, next_date)
+                    bp, notes = await asyncio.to_thread(bullpen.build_team_bullpen, team, report_date, next_date)
                     _bullpen_cache.setdefault(report_date, {})[team_id] = bp
                 except Exception as e:
-                    log.error("Edge alert: build failed for team %s: %s", team_id, e)
+                    log.error("Failed to build bullpen for edge alert, team %s: %s", team_id, e)
                     continue
             edge_notes.extend(bullpen.find_edges(team["abbreviation"], bp))
-        not_final = [g for g in games if g["abstract_state"] != "Final"]
-        if not_final:
-            # At 11:45 AM this is nearly impossible (suspended games) --
-            # but never-silent applies
-            edge_notes.append(
-                f"⚠️ {len(not_final)} of yesterday's game(s) not final "
-                "(suspended?) — that usage not included.")
+            final_batch_teams.append((team, bp, notes))
+
         storage.mark_edge_alert_sent(report_date)
+        storage.mark_final_batch_sent(report_date)
+
+        # Final consolidated batch: every team that played today, alphabetical,
+        # sent once the whole night's slate is done -- separate from (and in
+        # addition to) each team's own individual post right after its game.
+        for team, bp, notes in sorted(final_batch_teams, key=lambda x: x[0]["name"]):
+            try:
+                await channel.send(embed=build_report_embed(team, bp, notes, next_date))
+            except Exception as e:
+                log.error("Failed to send final-batch report for %s: %s", team["abbreviation"], e)
+        log.info("Posted final consolidated batch for %d teams", len(final_batch_teams))
+
         if edge_notes:
-            await channel.send(embed=build_edge_embed(edge_notes, next_date))
-            log.info("Posted nightly edge alert with %d notes", len(edge_notes))
-        else:
-            log.info("Nightly edge alert: no edges found — staying quiet")
-    except Exception as e:
-        log.error("edge_alert_post cycle failed, will retry tomorrow: %s", e)
+            try:
+                await channel.send(embed=build_edge_embed(edge_notes, next_date))
+                log.info("Posted edge alert with %d notes", len(edge_notes))
+            except Exception as e:
+                log.error("Failed to send edge alert: %s", e)
 
 
-@edge_alert_post.before_loop
-async def before_edge_alert():
+@poll_bullpens.before_loop
+async def before_poll():
     await client.wait_until_ready()
 
 
@@ -561,7 +523,6 @@ async def watchdog():
     if not poll_bullpens.is_running():
         log.error("poll_bullpens was found stopped -- restarting it now")
         poll_bullpens.start(client)
-        edge_alert_post.start(client)
     if not refresh_directory_loop.is_running():
         log.error("refresh_directory_loop was found stopped -- restarting it now")
         refresh_directory_loop.start(client)
