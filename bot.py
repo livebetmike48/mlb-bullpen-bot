@@ -178,6 +178,30 @@ class BullpenBot(discord.Client):
         self.tree.add_command(unmarkreliever_cmd)
         unmarkreliever_cmd.autocomplete("name")(self._name_autocomplete)
 
+        markstarter_cmd = app_commands.Command(
+            name="markstarter",
+            description="Override: always treat this pitcher as a rotation starter (out of the pen)",
+            callback=self._markstarter_callback,
+        )
+        self.tree.add_command(markstarter_cmd)
+        markstarter_cmd.autocomplete("name")(self._name_autocomplete)
+
+        unmarkstarter_cmd = app_commands.Command(
+            name="unmarkstarter",
+            description="Remove a previous /markstarter override",
+            callback=self._unmarkstarter_callback,
+        )
+        self.tree.add_command(unmarkstarter_cmd)
+        unmarkstarter_cmd.autocomplete("name")(self._name_autocomplete)
+
+        role_cmd = app_commands.Command(
+            name="role",
+            description="Why is this pitcher in (or out of) the bullpen report? Shows the reason",
+            callback=self._role_callback,
+        )
+        self.tree.add_command(role_cmd)
+        role_cmd.autocomplete("name")(self._name_autocomplete)
+
         setchannel_cmd = app_commands.Command(
             name="setchannel",
             description="Set this channel to receive bullpen reports and edge alerts",
@@ -304,6 +328,45 @@ class BullpenBot(discord.Client):
             return
         storage.remove_reliever_override(person_id)
         await interaction.response.send_message(f"✅ Removed reliever override for {pitcher_name}.")
+
+    async def _markstarter_callback(self, interaction: discord.Interaction, name: str):
+        person_id, pitcher_name = self._resolve_pitcher(name)
+        if person_id is None:
+            await interaction.response.send_message(f"Couldn't find a pitcher matching '{name}'.")
+            return
+        storage.add_starter_override(person_id, pitcher_name)
+        storage.remove_reliever_override(person_id)
+        await interaction.response.send_message(
+            f"✅ {pitcher_name} will now always be treated as a rotation starter (left out of bullpen reports)."
+        )
+
+    async def _unmarkstarter_callback(self, interaction: discord.Interaction, name: str):
+        person_id, pitcher_name = self._resolve_pitcher(name)
+        if person_id is None:
+            await interaction.response.send_message(f"Couldn't find a pitcher matching '{name}'.")
+            return
+        storage.remove_starter_override(person_id)
+        await interaction.response.send_message(f"✅ Removed starter override for {pitcher_name}.")
+
+    async def _role_callback(self, interaction: discord.Interaction, name: str):
+        await interaction.response.defer()
+        person_id, pitcher_name = self._resolve_pitcher(name)
+        if person_id is None:
+            await interaction.followup.send(f"Couldn't find a pitcher matching '{name}'.")
+            return
+        today = datetime.now(timezone.utc).date().isoformat()
+        try:
+            details = await asyncio.to_thread(mlb_api.get_people_details, [person_id])
+            role, reason = await asyncio.to_thread(
+                bullpen.role_for, person_id, details.get(person_id, {}), today, today)
+        except Exception as e:
+            await interaction.followup.send(f"Couldn't reach the MLB API right now: {e}")
+            return
+        label = "🔁 RELIEVER — shows in bullpen reports" if role == "reliever" else "🎯 STARTER — left out of bullpen reports"
+        await interaction.followup.send(
+            f"**{pitcher_name}**: {label}\nReason: {reason}\n"
+            f"-# override with /markreliever or /markstarter if this is wrong"
+        )
 
     async def _setchannel_callback(self, interaction: discord.Interaction):
         storage.set_config("announce_channel_id", str(interaction.channel_id))
