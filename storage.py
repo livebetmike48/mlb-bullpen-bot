@@ -2,7 +2,22 @@ import sqlite3
 import os
 from contextlib import contextmanager
 
-DB_PATH = os.getenv("DB_PATH", "bullpen_bot.db")
+import logging
+
+# Overrides + announce channel live here. They only survive a Railway
+# deploy if this file sits on the volume -- an unset DB_PATH used to land
+# it in the container, so every deploy quietly wiped /markreliever and
+# /setchannel (Mike: "overrides don't stick"). Default to /data when the
+# volume is mounted, and say so loudly at boot either way.
+DB_PATH = os.getenv("DB_PATH") or (
+    "/data/bullpen_bot.db" if os.path.isdir("/data") else "bullpen_bot.db")
+_log = logging.getLogger("bullpen_bot")
+if DB_PATH.startswith("/data"):
+    _log.info("storage: db at %s (on the volume — overrides persist across deploys)", DB_PATH)
+else:
+    _log.critical("storage: db at %s is NOT on a volume — /markreliever, /markstarter "
+                  "and /setchannel will be WIPED on every deploy. Attach a volume at "
+                  "/data or set DB_PATH.", DB_PATH)
 
 
 @contextmanager
@@ -43,6 +58,12 @@ def init_db():
         """)
         c.execute("""
             CREATE TABLE IF NOT EXISTS reliever_overrides (
+                pitcher_id INTEGER PRIMARY KEY,
+                pitcher_name TEXT
+            )
+        """)
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS starter_overrides (
                 pitcher_id INTEGER PRIMARY KEY,
                 pitcher_name TEXT
             )
@@ -129,6 +150,25 @@ def remove_reliever_override(pitcher_id: int):
 def get_reliever_overrides() -> set[int]:
     with _conn() as c:
         rows = c.execute("SELECT pitcher_id FROM reliever_overrides").fetchall()
+        return {r["pitcher_id"] for r in rows}
+
+
+def add_starter_override(pitcher_id: int, pitcher_name: str):
+    with _conn() as c:
+        c.execute(
+            "INSERT OR REPLACE INTO starter_overrides (pitcher_id, pitcher_name) VALUES (?, ?)",
+            (pitcher_id, pitcher_name),
+        )
+
+
+def remove_starter_override(pitcher_id: int):
+    with _conn() as c:
+        c.execute("DELETE FROM starter_overrides WHERE pitcher_id = ?", (pitcher_id,))
+
+
+def get_starter_overrides() -> set[int]:
+    with _conn() as c:
+        rows = c.execute("SELECT pitcher_id FROM starter_overrides").fetchall()
         return {r["pitcher_id"] for r in rows}
 
 
