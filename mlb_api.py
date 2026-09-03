@@ -201,3 +201,88 @@ def get_pitcher_game_log(person_id: int, season: int = CURRENT_SEASON) -> list[d
 
     splits.sort(key=lambda s: s["date"] or "")
     return splits
+
+
+# ---------------------------------------------------------------- role signals
+# Added Sept 3 for the starter/reliever classifier (bullpen.classify_role).
+
+MINOR_SPORT_IDS = {11: "AAA", 12: "AA", 13: "High-A", 14: "Single-A"}
+_probables_cache: dict[str, set[int]] = {}
+_gamelog_cache: dict[tuple[int, str], list[dict]] = {}
+_minors_cache: dict[tuple[int, int], dict] = {}
+
+
+def ip_to_float(ip) -> float:
+    """MLB '5.2' innings = 5 and 2/3."""
+    try:
+        s = str(ip or "0")
+        whole, _, frac = s.partition(".")
+        return int(whole or 0) + int(frac or 0) / 3.0
+    except Exception:
+        return 0.0
+
+
+def get_probable_starter_ids(date_str: str) -> set[int]:
+    """Every listed probable starter across MLB for one date -- ONE call,
+    cached. A pitcher on this list is a starter today no matter what his
+    season line says (the Kade Anderson call-up case)."""
+    if date_str in _probables_cache:
+        return _probables_cache[date_str]
+    out: set[int] = set()
+    try:
+        resp = requests.get(f"{BASE}/schedule",
+                            params={"sportId": 1, "date": date_str,
+                                    "hydrate": "probablePitcher"}, timeout=15)
+        resp.raise_for_status()
+        for d in resp.json().get("dates", []):
+            for g in d.get("games", []):
+                for side in ("home", "away"):
+                    pp = ((g.get("teams") or {}).get(side) or {}).get("probablePitcher") or {}
+                    if pp.get("id"):
+                        out.add(int(pp["id"]))
+    except Exception:
+        pass  # classifier treats an empty set as "no signal", not "not a starter"
+    _probables_cache[date_str] = out
+    return out
+
+
+def get_pitcher_game_log_cached(person_id: int, date_str: str,
+                                season: int = CURRENT_SEASON) -> list[dict]:
+    key = (person_id, date_str)
+    if key not in _gamelog_cache:
+        try:
+            _gamelog_cache[key] = get_pitcher_game_log(person_id, season)
+        except Exception:
+            _gamelog_cache[key] = []
+    return _gamelog_cache[key]
+
+
+def get_minor_league_pitching(person_id: int, season: int = CURRENT_SEASON) -> dict:
+    """Season pitching line across the minor-league levels, summed:
+    {"games_started", "games_played", "levels": ["AAA", ...]}.
+    Only called for arms with almost no MLB appearances, so the extra
+    calls stay rare."""
+    key = (person_id, season)
+    if key in _minors_cache:
+        return _minors_cache[key]
+    gs = gp = 0
+    levels = []
+    for sid, label in MINOR_SPORT_IDS.items():
+        try:
+            resp = requests.get(f"{BASE}/people/{person_id}/stats",
+                                params={"stats": "season", "group": "pitching",
+                                        "season": season, "sportId": sid}, timeout=15)
+            resp.raise_for_status()
+            for block in resp.json().get("stats", []):
+                for split in block.get("splits", []):
+                    st = split.get("stat") or {}
+                    g = int(st.get("gamesPlayed") or 0)
+                    if g:
+                        gp += g
+                        gs += int(st.get("gamesStarted") or 0)
+                        levels.append(label)
+        except Exception:
+            continue
+    out = {"games_started": gs, "games_played": gp, "levels": levels}
+    _minors_cache[key] = out
+    return out
